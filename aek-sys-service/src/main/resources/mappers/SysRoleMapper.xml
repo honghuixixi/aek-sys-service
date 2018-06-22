@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.aek.ebey.sys.mapper.SysRoleMapper">
+
+	<!-- 通用查询映射结果 -->
+	<resultMap id="BaseResultMap" type="com.aek.ebey.sys.model.SysRole">
+		<id column="id" property="id" />
+		<result column="tenant_id" property="tenantId" />
+		<result column="name" property="name" />
+		<result column="code" property="code" />
+		<result column="preset_id" property="presetId" />
+		<result column="data_scope" property="dataScope" />
+		<result column="descript" property="descript" />
+		<result column="create_by" property="createBy" />
+		<result column="create_time" property="createTime" />
+		<result column="update_by" property="updateBy" />
+		<result column="update_time" property="updateTime" />
+		<result column="del_flag" property="delFlag" />
+		<result column="enable" property="enable" />
+		<result column="custom_data" property="customData" />
+	</resultMap>
+	
+	<resultMap id="SysRoleVoResultMap" type = "com.aek.ebey.sys.model.vo.SysRoleVo">
+		<id column="id" property="id" />
+        <result column="name" property="name" />
+        <result column="check" property="check" />
+	</resultMap>
+	
+	<resultMap id="SysTenantRoleVoResultMap" type="com.aek.ebey.sys.model.vo.SysTenantRoleVo">
+		<id column="id" property="tenantId" />
+        <result column="name" property="tenantName" />
+        <result column="userId" property="userId" />
+        <collection property="roles" ofType="com.aek.ebey.sys.model.vo.SysRoleVo" select="selectByUserIdAndTenantId" column = "{tenantId=id,userId=userId}" /> 
+	</resultMap>
+
+	<!-- 通用查询结果列 -->
+	<sql id="Base_Column_List">
+		id, tenant_id AS tenantId, name, code, preset_id AS presetId, data_scope AS dataScope, descript, 
+		create_by AS createBy,create_time AS createTime, update_by AS updateBy,update_time AS updateTime, del_flag AS delFlag, 
+		enable, custom_data AS customData
+	</sql>
+	
+	<!-- 查询当前用户在某机构下拥有的角色 -->
+	<select id="selectByUserIdAndTenantId" resultMap="SysRoleVoResultMap" parameterType="java.util.Map" >
+		select r.id,r.name,(case when u.id is not null then true else false end) as  'check' 
+		from sys_role  r
+		left join sys_role_user  u on r.id = u.role_id and u.user_id=#{userId}
+		where r.enable=true and r.del_flag=false and r.tenant_id=#{tenantId}
+	</select>
+	
+	<!-- 查询当前用户当前机构及其子机构所有角色 -->
+	<select id="selectAllRoleByUserIdAndTenantId" resultMap="SysTenantRoleVoResultMap">
+		SELECT id,name,#{userId} as userId
+		FROM sys_tenant 
+		WHERE (del_flag = false AND (parent_ids LIKE CONCAT('',#{parentIds},'%') or id=#{tenantId}) AND enable = true)
+	</select>
+	
+	<select id="isOrgAdmin" resultType="boolean">
+		<!-- 拥有当期机构或爱医康机构下的机构管理员角色 -->
+		select count(sr.id) 
+		from  sys_role_user ru
+		left join sys_role sr on ru.role_id = sr.id
+		where ru.user_id=#{userId} AND (sr.tenant_id = #{tenantId} or sr.tenant_id = 1) 
+		AND sr.name = '机构管理员' AND ru.`enable` = TRUE AND sr.del_flag = FALSE AND sr.`enable` = TRUE
+	</select>
+	
+	<select id="getOrgModuleIds" resultType="long">
+		SELECT
+			tm.module_id	
+		FROM
+			sys_tenant_module tm
+		LEFT JOIN sys_user_module um ON tm.module_id = um.module_id
+		AND um.user_id = #{userId}
+		WHERE
+			tm.tenant_id = #{tenantId}
+		AND tm.`enable` = TRUE
+		AND tm.del_flag = FALSE
+		GROUP BY
+			tm.module_id
+	</select>
+	
+	<select id="getOrgModuleByRole" resultType="long">
+		SELECT
+			t.moduleId
+		FROM
+			(
+				SELECT DISTINCT
+					sm.`name`,
+					sm.url,
+					sm.id AS moduleId,
+					sm.version_number AS version,
+					ru.user_id AS userId,
+					sm.description
+				FROM
+					sys_role_user ru
+				INNER JOIN sys_role_permission rp
+				INNER JOIN sys_module sm ON ru.role_id = rp.role_id
+				AND rp.module_id = sm.id
+				WHERE
+					ru.user_id = #{userId}
+				AND ru.tenant_id = #{tenantId}
+				AND ru.`enable` = TRUE
+				AND rp.del_flag = FALSE
+				AND rp.`enable` = TRUE
+				AND sm.del_flag = FALSE
+				AND sm.`enable` = TRUE 
+				group BY sm.id,sm.name,sm.url,sm.version_number,ru.user_id
+			) t
+		LEFT JOIN sys_user_module um ON um.user_id = t.userId
+		AND um.module_id = t.moduleId
+	</select>
+
+	<!--角色分页查询-->
+	<select id="getSysRoleByPage" resultType="com.aek.ebey.sys.model.SysRole">
+		SELECT r.id,r.name,r.preset_id as presetId,r.descript,r.enable,count(ru.id) as userCount
+		FROM sys_role r
+		LEFT JOIN sys_role_user ru on r.id = ru.role_id
+		WHERE r.del_flag=false
+		<if test="query.tenantId != null and query.tenantId != ''">
+			AND r.tenant_id = #{query.tenantId}
+		</if>
+		<if test="query.enable != null">
+			AND r.enable = #{query.enable}
+		</if>
+		<if test="query.roleType != null and query.roleType == 1">
+			AND r.preset_id &gt; 0
+		</if>
+		<if test="query.roleType != null and query.roleType == 2">
+			AND (r.preset_id is null or r.preset_id = 0)
+		</if>
+		<if test="query.keyword != null and query.keyword != ''">
+			AND r.name LIKE CONCAT('%',#{query.keyword},'%')
+		</if>
+		GROUP BY r.id
+		ORDER BY r.id
+	</select>
+
+</mapper>
